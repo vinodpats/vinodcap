@@ -1,0 +1,78 @@
+---
+_schema-version: '3.1'
+ID: vinodcap
+version: 1.0.0
+description: "A simple CAP project."
+parameters:
+  enable-parallel-deployments: true
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - npx -p @sap/cds-dk cds build --production
+
+modules:
+  - name: vinodcap-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      buildpack: nodejs_buildpack
+      memory: 256M
+    build-parameters:
+      builder: npm-ci
+    provides:
+      - name: srv-api # required by consumers of CAP services (e.g. approuter)
+        properties:
+          srv-url: ${default-url}
+    requires:
+      - name: vinodcap-db
+      - name: vinodcap-uaa
+
+  - name: vinodcap-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    requires:
+      - name: vinodcap-db
+
+  - name: vinodcap
+    type: approuter.nodejs
+    path: app/ # from cds.env.folders. Consider also cds.env.build.target --> gen/app
+    parameters:
+      keep-existing-routes: true
+      disk-quota: 256M
+      memory: 256M
+      # hosts: # additional tenant specific hostnames (only for Canary)
+      ## the developer will do this via an extension descriptor:
+      # - <paas-subdomain >${tenant-delimiter}${host}
+      # - <saas-subdomain1>${tenant-delimiter}${host}
+      # - ...
+    requires:
+      - name: srv-api
+        group: destinations
+        properties:
+          name: srv-api # this is a name which must be used in xs-app.json as well
+          url: ~{srv-url}
+          forwardAuthToken: true
+      - name: vinodcap-uaa
+
+resources:
+  - name: vinodcap-db
+    type: com.sap.xs.hdi-container
+    parameters:
+      service: hana # or 'hanatrial' on trial landscapes
+      service-plan: hdi-shared
+    properties:
+      hdi-service-name: ${service-name}
+
+  - name: vinodcap-uaa
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      config:
+        xsappname: vinodcap-${org}-${space}
+        tenant-mode: dedicated
